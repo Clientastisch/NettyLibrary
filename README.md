@@ -18,3 +18,9 @@ A small netty library to setup an easy to use server / client
     <scope>provided</scope>
 </dependency>
 ```
+
+## Clone
+
+```
+git clone -b simple https://github.com/Clientastisch/NettyLibrary.git
+```

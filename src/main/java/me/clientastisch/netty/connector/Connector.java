@@ -25,17 +25,14 @@ public class Connector implements ConnectorStructure<Connector> {
     private IConnector processor;
     private Channel channel;
 
-    private Type type;
-
     private String address, name;
     private int port;
 
-    public Connector(String address, int port, Type type) {
+    public Connector(String address, int port) {
         this.executor = Executors.newScheduledThreadPool(Math.min(Runtime.getRuntime().availableProcessors(), 2));
         this.name = "Connector@" + ThreadLocalRandom.current().nextInt(100, 999);
 
         this.address = address;
-        this.type = type;
         this.port = port;
 
         group = new NioEventLoopGroup();
@@ -73,33 +70,26 @@ public class Connector implements ConnectorStructure<Connector> {
     }
 
     @Override
+    @SneakyThrows
     public Connector initialise() {
-            try {
-                Bootstrap bootstrap = new Bootstrap()
-                        .group(group)
-                        .channel(NioSocketChannel.class)
-                        .handler(new ChannelInitializer<SocketChannel>() {
-                            @Override
-                            protected void initChannel(SocketChannel socket) throws Exception {
-                                ChannelPipeline pipeline = socket.pipeline();
+        Bootstrap bootstrap = new Bootstrap()
+                .group(group)
+                .channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel socket) throws Exception {
+                        ChannelPipeline pipeline = socket.pipeline();
 
-                                if(getType().equals(Type.BYTEBUF))
-                                    pipeline.addLast(new Connector.TcpProcessor(Connector.this));
-                                else {
-                                    pipeline.addLast("framer", new DelimiterBasedFrameDecoder(Integer.MAX_VALUE, Delimiters.lineDelimiter()));
-                                    pipeline.addLast("decoder", new StringDecoder());
-                                    pipeline.addLast("encoder", new StringEncoder());
+                        pipeline.addLast("framer", new DelimiterBasedFrameDecoder(Integer.MAX_VALUE, Delimiters.lineDelimiter()));
+                        pipeline.addLast("decoder", new StringDecoder());
+                        pipeline.addLast("encoder", new StringEncoder());
 
-                                    pipeline.addLast("handler", new NettyProcessor(Connector.this));
-                                }
-                            }
-                        });
+                        pipeline.addLast("handler", new NettyProcessor(Connector.this));
+                    }
+                }
+        );
 
-                channel = bootstrap.connect(getAddress(), getPort()).sync().channel();
-
-            } catch (InterruptedException ex) {
-                processor.onException(ex);
-            }
+        channel = bootstrap.connect(getAddress(), getPort()).sync().channel();
         return this;
     }
 
@@ -114,38 +104,6 @@ public class Connector implements ConnectorStructure<Connector> {
     public Connector terminateGracefully() {
         group.shutdownGracefully();
         return this;
-    }
-
-    private class TcpProcessor extends ChannelInboundHandlerAdapter {
-
-        @Getter
-        private Connector connector;
-
-        public TcpProcessor(Connector connector) {
-            this.connector = connector;
-        }
-
-        @Override
-        public void channelRead(ChannelHandlerContext context, Object label) throws Exception {
-            connector.processor.receivePacket(context, label);
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext context, Throwable cause) throws Exception {
-            connector.processor.onException(context, cause);
-        }
-
-        @Override
-        public void handlerRemoved(ChannelHandlerContext context) throws Exception {
-            connector.processor.onDisconnect(context);
-        }
-
-        @Override
-        public void channelUnregistered(ChannelHandlerContext channelHandlerContext) throws Exception {
-            connector.processor.onDisconnect(channelHandlerContext);
-            super.channelUnregistered(channelHandlerContext);
-        }
-
     }
 
     private class NettyProcessor extends SimpleChannelInboundHandler<String> {
@@ -182,9 +140,5 @@ public class Connector implements ConnectorStructure<Connector> {
             connector.processor.onDisconnect(channelHandlerContext);
             super.channelUnregistered(channelHandlerContext);
         }
-    }
-
-    public static enum Type {
-        STRING, BYTEBUF, HTTP
     }
 }

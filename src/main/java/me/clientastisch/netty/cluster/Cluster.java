@@ -39,18 +39,16 @@ public class Cluster implements ClusterStructure<Cluster> {
 
     private boolean autoPort;
     private int timeOut;
-    private Type type;
 
     private String address, name;
     private AtomicInteger port;
 
-    public Cluster(String address, int port, Type type) {
+    public Cluster(String address, int port) {
         this.name = "Cluster@" + ThreadLocalRandom.current().nextInt(100, 999);
         this.channels = new DefaultChannelGroup(new DefaultEventExecutor());
         this.executor = Executors.newCachedThreadPool();
 
         this.address = address;
-        this.type = type;
 
         this.timeOut = Integer.MAX_VALUE;
         this.port = new AtomicInteger(port);
@@ -109,21 +107,12 @@ public class Cluster implements ClusterStructure<Cluster> {
                         protected void initChannel(SocketChannel channel) {
                             ChannelPipeline pipeline = channel.pipeline();
 
-                            if(getType().equals(Type.BYTEBUF))
-                                pipeline.addLast(new SocketProcessor(Cluster.this));
-                            else if(getType().equals(Type.STRING)) {
-                                pipeline.addLast("framer", new DelimiterBasedFrameDecoder(Integer.MAX_VALUE, Delimiters.lineDelimiter()));
-                                pipeline.addLast("decoder", new StringDecoder());
-                                pipeline.addLast("encoder", new StringEncoder());
-
-                                pipeline.addLast("handler", new NettyProcessor(Cluster.this));
-                            } else if(getType().equals(Type.HTTP)) {
-                                pipeline.addLast(new HttpRequestDecoder());
-                                pipeline.addLast(new HttpResponseEncoder());
-                                pipeline.addLast(new HttpProcessor(Cluster.this));
-                            }
+                            pipeline.addLast("framer", new DelimiterBasedFrameDecoder(Integer.MAX_VALUE, Delimiters.lineDelimiter()));
+                            pipeline.addLast("decoder", new StringDecoder());
+                            pipeline.addLast("encoder", new StringEncoder());
                         }
-                    });
+                    }
+            );
 
             bind(bootstrap);
         });
@@ -150,64 +139,6 @@ public class Cluster implements ClusterStructure<Cluster> {
         this.workerGroup.shutdownGracefully();
         this.bossGroup.shutdownGracefully();
         return this;
-    }
-
-    private class SocketProcessor extends ChannelInboundHandlerAdapter {
-
-        @Getter
-        private Cluster cluster;
-
-        private Channel channel;
-        private long lastResponse;
-
-        public SocketProcessor(Cluster cluster) {
-            this.cluster = cluster;
-        }
-
-        public void checkResponse(Channel channel) {
-            Timer timeOut = new Timer(channel.remoteAddress().toString(), false);
-            timeOut.schedule(new TimerTask() {
-                @Override
-                public void run() {
-                    if(lastResponse < (System.currentTimeMillis() - cluster.getTimeOut())) {
-                        cluster.processor.onTimeout(channel, System.currentTimeMillis() - lastResponse);
-                        SocketProcessor.this.channel = null;
-                        channel.close();
-
-                        timeOut.cancel();
-                    }
-                }
-            }, cluster.getTimeOut(), cluster.getTimeOut());
-        }
-
-        @Override
-        public void handlerAdded(ChannelHandlerContext context) {
-            lastResponse = System.currentTimeMillis();
-            channel = context.channel();
-
-            cluster.channels.add(context.channel());
-            cluster.processor.onConnect(context);
-            checkResponse(context.channel());
-        }
-
-        @Override
-        public void handlerRemoved(ChannelHandlerContext context) {
-            cluster.channels.remove(context.channel());
-            channel = null;
-
-            cluster.processor.onDisconnect(context);
-        }
-
-        @Override
-        public void channelRead(ChannelHandlerContext context, Object label) {
-            lastResponse = System.currentTimeMillis();
-            cluster.processor.receivePacket(context, label);
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
-            cluster.processor.onException(context, cause);
-        }
     }
 
     private class NettyProcessor extends SimpleChannelInboundHandler<String> {
@@ -266,67 +197,5 @@ public class Cluster implements ClusterStructure<Cluster> {
         public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
             cluster.processor.onException(context, cause);
         }
-    }
-
-    private class HttpProcessor extends SimpleChannelInboundHandler<HttpObject> {
-
-        @Getter
-        private Cluster cluster;
-
-        private Channel channel;
-        private long lastResponse;
-
-        public HttpProcessor(Cluster cluster) {
-            this.cluster = cluster;
-        }
-
-        public void checkResponse(Channel channel) {
-            Timer timeOut = new Timer(channel.remoteAddress().toString(), false);
-            timeOut.schedule(new TimerTask() {
-                @Override
-                public void run() {
-                    if(lastResponse < (System.currentTimeMillis() - cluster.getTimeOut())) {
-                        cluster.processor.onTimeout(channel, System.currentTimeMillis() - lastResponse);
-                        HttpProcessor.this.channel = null;
-                        channel.close();
-
-                        timeOut.cancel();
-                    }
-                }
-            }, cluster.getTimeOut(), cluster.getTimeOut());
-        }
-
-        @Override
-        public void handlerAdded(ChannelHandlerContext context) {
-            lastResponse = System.currentTimeMillis();
-            channel = context.channel();
-
-            cluster.channels.add(context.channel());
-            cluster.processor.onConnect(context);
-            checkResponse(context.channel());
-        }
-
-        @Override
-        public void handlerRemoved(ChannelHandlerContext context) {
-            cluster.channels.remove(context.channel());
-            channel = null;
-
-            cluster.processor.onDisconnect(context);
-        }
-
-        @Override
-        public void channelRead0(ChannelHandlerContext context, HttpObject httpObject) throws Exception {
-            lastResponse = System.currentTimeMillis();
-            cluster.processor.receivePacket(context, httpObject);
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
-            cluster.processor.onException(context, cause);
-        }
-    }
-
-    public static enum Type {
-        STRING, BYTEBUF, HTTP
     }
 }
